@@ -1,10 +1,14 @@
 package com.example.data.ai
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import com.example.data.model.ProductInfo
 import com.example.data.model.StorePrice
+import com.example.data.preferences.UserPreferencesRepository
+import com.example.data.remote.GeminiDirectApiClient
 import com.example.data.remote.ShoppingLinkBuilder
+import com.example.util.ensureFirebaseInitialized
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.Schema
@@ -13,6 +17,7 @@ import com.google.firebase.ai.type.generationConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
@@ -20,7 +25,11 @@ import java.util.UUID
 
 private const val TAG = "ProductAiService"
 
-class ProductAiService {
+class ProductAiService(
+    private val context: Context,
+    private val directClient: GeminiDirectApiClient = GeminiDirectApiClient(),
+    private val preferencesRepository: UserPreferencesRepository = UserPreferencesRepository(context)
+) {
 
     private val productSchema by lazy {
         Schema.obj(
@@ -63,6 +72,7 @@ class ProductAiService {
     }
 
     private val model by lazy {
+        ensureFirebaseInitialized(context)
         Firebase.ai.generativeModel(
             modelName = "gemini-3.8-flash",
             generationConfig = generationConfig {
@@ -78,28 +88,56 @@ class ProductAiService {
         currencySymbol: String = "$"
     ): Result<ProductInfo> = withContext(Dispatchers.IO) {
         try {
+            val useCustom = preferencesRepository.useCustomApiFlow.first()
+            val customKey = preferencesRepository.customApiKeyFlow.first()
+
             val prompt = """
                 Analyze this image and identify the physical product accurately.
                 Examine packaging, brand logos, model text, typography, visual shape, materials, and colors.
-                Provide structured details:
-                - Exact product name and brand.
-                - Realistic prices across at least 4 major retailers (e.g. Amazon, Walmart, Target, Best Buy, or eBay) in currency $currencySymbol.
-                - Visible specifications.
-                - Confidence level between 0 and 100.
-                - Never invent false brands. If ambiguous, provide the closest match and mark confidence appropriately.
+                Return clean JSON matching this format:
+                {
+                  "name": "...",
+                  "brand": "...",
+                  "model": "...",
+                  "category": "...",
+                  "description": "...",
+                  "color": "...",
+                  "productType": "...",
+                  "confidence": 95,
+                  "specifications": [ { "key": "...", "value": "..." } ],
+                  "estimatedPrices": [
+                    {
+                      "storeName": "Amazon",
+                      "productTitle": "...",
+                      "price": 49.99,
+                      "currency": "$currencySymbol",
+                      "availability": "In Stock",
+                      "searchQuery": "...",
+                      "matchConfidence": 95,
+                      "rating": 4.5
+                    }
+                  ]
+                }
+                Provide realistic prices across at least 4 major stores (Amazon, Walmart, Target, Best Buy, or eBay) in currency $currencySymbol.
             """.trimIndent()
 
-            val response = withTimeout(60_000L) {
-                model.generateContent(
-                    content {
-                        image(bitmap)
-                        text(prompt)
-                    }
-                )
+            val jsonString: String = if (useCustom && customKey.isNotBlank()) {
+                val directRes = directClient.generateContent(customKey.trim(), prompt, bitmap)
+                if (directRes.isFailure) {
+                    return@withContext Result.failure(directRes.exceptionOrNull() ?: Exception("Custom API error."))
+                }
+                directRes.getOrThrow()
+            } else {
+                val response = withTimeout(60_000L) {
+                    model.generateContent(
+                        content {
+                            image(bitmap)
+                            text(prompt)
+                        }
+                    )
+                }
+                response.text ?: return@withContext Result.failure(IllegalStateException("No response from AI model."))
             }
-
-            val jsonString = response.text
-                ?: return@withContext Result.failure(IllegalStateException("No response from AI model."))
 
             val productInfo = parseProductJson(jsonString, currencySymbol, barcode = null)
             Result.success(productInfo)
@@ -119,25 +157,54 @@ class ProductAiService {
         currencySymbol: String = "$"
     ): Result<ProductInfo> = withContext(Dispatchers.IO) {
         try {
+            val useCustom = preferencesRepository.useCustomApiFlow.first()
+            val customKey = preferencesRepository.customApiKeyFlow.first()
+
             val prompt = """
                 Find detailed specifications and price comparison for the product: "$query".
-                Identify:
-                - Official brand, model, category, comprehensive description.
-                - Key specifications (dimensions, specs, features).
-                - Real current market price comparison across major online stores (Amazon, Walmart, Best Buy, Target, eBay) in currency $currencySymbol.
-                - High confidence rating.
+                Return JSON format with:
+                {
+                  "name": "...",
+                  "brand": "...",
+                  "model": "...",
+                  "category": "...",
+                  "description": "...",
+                  "color": "...",
+                  "productType": "...",
+                  "confidence": 95,
+                  "specifications": [ { "key": "...", "value": "..." } ],
+                  "estimatedPrices": [
+                    {
+                      "storeName": "Amazon",
+                      "productTitle": "...",
+                      "price": 99.99,
+                      "currency": "$currencySymbol",
+                      "availability": "In Stock",
+                      "searchQuery": "...",
+                      "matchConfidence": 95,
+                      "rating": 4.6
+                    }
+                  ]
+                }
+                Real current market prices across online stores in currency $currencySymbol.
             """.trimIndent()
 
-            val response = withTimeout(60_000L) {
-                model.generateContent(
-                    content {
-                        text(prompt)
-                    }
-                )
+            val jsonString: String = if (useCustom && customKey.isNotBlank()) {
+                val directRes = directClient.generateContent(customKey.trim(), prompt, null)
+                if (directRes.isFailure) {
+                    return@withContext Result.failure(directRes.exceptionOrNull() ?: Exception("Custom API error."))
+                }
+                directRes.getOrThrow()
+            } else {
+                val response = withTimeout(60_000L) {
+                    model.generateContent(
+                        content {
+                            text(prompt)
+                        }
+                    )
+                }
+                response.text ?: return@withContext Result.failure(IllegalStateException("Empty AI response."))
             }
-
-            val jsonString = response.text
-                ?: return@withContext Result.failure(IllegalStateException("Empty AI response."))
 
             val productInfo = parseProductJson(jsonString, currencySymbol, barcode = null)
             Result.success(productInfo)
@@ -159,23 +226,56 @@ class ProductAiService {
         currencySymbol: String = "$"
     ): Result<ProductInfo> = withContext(Dispatchers.IO) {
         try {
+            val useCustom = preferencesRepository.useCustomApiFlow.first()
+            val customKey = preferencesRepository.customApiKeyFlow.first()
+
             val hint = if (!knownName.isNullOrBlank()) "Known product: $knownName by ${knownBrand ?: "Unknown"}." else ""
             val prompt = """
                 Barcode detected: "$barcode". $hint
                 Retrieve or identify this commercial product.
-                Provide complete product details, specifications, and realistic retail prices across major stores in currency $currencySymbol.
+                Return JSON format:
+                {
+                  "name": "...",
+                  "brand": "...",
+                  "model": "...",
+                  "category": "...",
+                  "description": "...",
+                  "color": "...",
+                  "productType": "...",
+                  "confidence": 95,
+                  "specifications": [ { "key": "...", "value": "..." } ],
+                  "estimatedPrices": [
+                    {
+                      "storeName": "Amazon",
+                      "productTitle": "...",
+                      "price": 24.99,
+                      "currency": "$currencySymbol",
+                      "availability": "In Stock",
+                      "searchQuery": "...",
+                      "matchConfidence": 95,
+                      "rating": 4.5
+                    }
+                  ]
+                }
+                Provide complete details and realistic retail prices across major stores in currency $currencySymbol.
             """.trimIndent()
 
-            val response = withTimeout(60_000L) {
-                model.generateContent(
-                    content {
-                        text(prompt)
-                    }
-                )
+            val jsonString: String = if (useCustom && customKey.isNotBlank()) {
+                val directRes = directClient.generateContent(customKey.trim(), prompt, null)
+                if (directRes.isFailure) {
+                    return@withContext Result.failure(directRes.exceptionOrNull() ?: Exception("Custom API error."))
+                }
+                directRes.getOrThrow()
+            } else {
+                val response = withTimeout(60_000L) {
+                    model.generateContent(
+                        content {
+                            text(prompt)
+                        }
+                    )
+                }
+                response.text ?: return@withContext Result.failure(IllegalStateException("Empty AI response for barcode."))
             }
-
-            val jsonString = response.text
-                ?: return@withContext Result.failure(IllegalStateException("Empty AI response for barcode."))
 
             val productInfo = parseProductJson(jsonString, currencySymbol, barcode = barcode)
             Result.success(productInfo)
@@ -195,7 +295,14 @@ class ProductAiService {
         fallbackCurrency: String,
         barcode: String?
     ): ProductInfo {
-        val root = JSONObject(jsonString)
+        // Strip markdown fences if present
+        val cleanJson = jsonString.trim()
+            .removePrefix("```json")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+
+        val root = JSONObject(cleanJson)
         val name = root.optString("name", "Unknown Product")
         val brand = root.optString("brand", "Generic")
         val model = root.optString("model", "")
@@ -263,7 +370,6 @@ class ProductAiService {
         }
 
         if (storesList.isEmpty()) {
-            // Default major store fallbacks with actual direct search links
             val defaultStores = listOf("Amazon", "Walmart", "Target", "Best Buy", "eBay")
             defaultStores.forEachIndexed { idx, sName ->
                 storesList.add(

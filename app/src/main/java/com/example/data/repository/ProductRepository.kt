@@ -24,7 +24,7 @@ import java.util.UUID
 
 class ProductRepository(
     private val context: Context,
-    private val aiService: ProductAiService = ProductAiService(),
+    private val aiService: ProductAiService = ProductAiService(context),
     private val barcodeService: BarcodeLookupService = BarcodeLookupService(),
     private val database: AppDatabase = AppDatabase.getDatabase(context)
 ) {

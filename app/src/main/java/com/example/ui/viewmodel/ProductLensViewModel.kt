@@ -62,6 +62,12 @@ class ProductLensViewModel(application: Application) : AndroidViewModel(applicat
     val preferredCurrency: StateFlow<String> = preferencesRepository.currencyFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "$")
 
+    val customApiKey: StateFlow<String> = preferencesRepository.customApiKeyFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
+    val useCustomApi: StateFlow<Boolean> = preferencesRepository.useCustomApiFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
     fun setScanningMode(mode: ScanningMode) {
         _scanningMode.value = mode
     }
@@ -197,6 +203,31 @@ class ProductLensViewModel(application: Application) : AndroidViewModel(applicat
     fun setCurrency(currency: String) {
         viewModelScope.launch {
             preferencesRepository.setCurrency(currency)
+        }
+    }
+
+    fun setCustomApiKey(key: String) {
+        viewModelScope.launch {
+            preferencesRepository.setCustomApiKey(key.trim())
+        }
+    }
+
+    fun setUseCustomApi(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setUseCustomApi(enabled)
+        }
+    }
+
+    fun testCustomApiKey(key: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val directClient = com.example.data.remote.GeminiDirectApiClient()
+            val result = directClient.testApiKey(key.trim())
+            if (result.isSuccess) {
+                onResult(true, "API Key is valid and connected successfully!")
+            } else {
+                val err = result.exceptionOrNull()?.localizedMessage ?: "Failed to connect with API Key."
+                onResult(false, err)
+            }
         }
     }
 }

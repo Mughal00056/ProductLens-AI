@@ -16,10 +16,12 @@ class UserPreferencesRepository(private val context: Context) {
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val CURRENCY = stringPreferencesKey("preferred_currency")
         val HAPTICS = booleanPreferencesKey("haptics_enabled")
+        val CUSTOM_API_KEY = stringPreferencesKey("custom_api_key")
+        val USE_CUSTOM_API = booleanPreferencesKey("use_custom_api")
     }
 
     val themeModeFlow: Flow<String> = context.dataStore.data.map { preferences ->
-        preferences[PreferencesKeys.THEME_MODE] ?: "dark" // default to stunning dark cyberpunk theme
+        preferences[PreferencesKeys.THEME_MODE] ?: "dark"
     }
 
     val currencyFlow: Flow<String> = context.dataStore.data.map { preferences ->
@@ -28,6 +30,14 @@ class UserPreferencesRepository(private val context: Context) {
 
     val hapticsFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
         preferences[PreferencesKeys.HAPTICS] ?: true
+    }
+
+    val customApiKeyFlow: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[PreferencesKeys.CUSTOM_API_KEY] ?: ""
+    }
+
+    val useCustomApiFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[PreferencesKeys.USE_CUSTOM_API] ?: false
     }
 
     suspend fun setThemeMode(theme: String) {
@@ -45,6 +55,18 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun setHapticsEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.HAPTICS] = enabled
+        }
+    }
+
+    suspend fun setCustomApiKey(key: String) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.CUSTOM_API_KEY] = key
+        }
+    }
+
+    suspend fun setUseCustomApi(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.USE_CUSTOM_API] = enabled
         }
     }
 }
