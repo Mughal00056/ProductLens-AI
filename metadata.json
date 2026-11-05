@@ -1,0 +1,6 @@
+{
+  "name": "ProductLens AI",
+  "description": "AI-powered product scanner identifying physical items, comparing store prices, and finding shopping deals.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
